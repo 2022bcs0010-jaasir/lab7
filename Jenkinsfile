@@ -133,7 +133,7 @@ pipeline {
                     timeout(time: 60, unit: 'SECONDS') {
                         waitUntil {
                             def status = sh(
-                                script: "curl -s -o /dev/null -w '%{http_code}' http://localhost:${PORT}/health || true",
+                                script: "curl -s -o /dev/null -w '%{http_code}' http://host.docker.internal:${PORT}/health || true",
                                 returnStdout: true
                             ).trim()
                             return status == "200"
