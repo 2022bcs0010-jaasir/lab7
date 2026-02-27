@@ -2,13 +2,17 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = "mdjaasir2022bcs0010/lab6"
-        METRICS_FILE = "app/artifacts/metrics.json"
+        DOCKER_IMAGE   = "mdjaasir2022bcs0010/lab7"
+        METRICS_FILE   = "app/artifacts/metrics.json"
         CONTAINER_NAME = "wine_validation_container"
-        PORT = "8000"
+        PORT           = "8002"
     }
 
     stages {
+
+        // ===============================
+        // LAB 6 - TRAINING PIPELINE
+        // ===============================
 
         stage('Checkout') {
             steps {
@@ -36,7 +40,7 @@ pipeline {
             }
         }
 
-        stage('Read Accuracy') {
+        stage('Read Metrics') {
             steps {
                 script {
                     def metrics = readJSON file: "${METRICS_FILE}"
@@ -49,7 +53,7 @@ pipeline {
             }
         }
 
-        stage('Compare Accuracy') {
+        stage('Compare Metrics') {
             steps {
                 script {
                     withCredentials([
@@ -66,17 +70,19 @@ pipeline {
                         echo "Best MSE: ${best_mse}"
                         echo "Best R2 : ${best_r2}"
 
-                        if (current_mse < best_mse && current_r2 > best_r2) {
-                            env.MODEL_IMPROVED = "true"
-                            echo "Model Improved"
-                        } else {
-                            env.MODEL_IMPROVED = "false"
-                            error("Model did not improve. Stopping pipeline.")
+                        if (!(current_mse < best_mse && current_r2 > best_r2)) {
+                            error("Model did NOT improve. Stopping pipeline.")
                         }
+
+                        echo "Model Improved. Proceeding to build."
                     }
                 }
             }
         }
+
+        // ===============================
+        // BUILD & PUSH
+        // ===============================
 
         stage('Build Docker Image') {
             steps {
@@ -91,7 +97,6 @@ pipeline {
                     usernameVariable: 'DOCKER_USER',
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
-
                     sh '''
                         echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
                         docker tag ${DOCKER_IMAGE}:${BUILD_NUMBER} ${DOCKER_IMAGE}:latest
@@ -103,7 +108,7 @@ pipeline {
         }
 
         // ===============================
-        // LAB 7 VALIDATION STARTS HERE
+        // LAB 7 - VALIDATION PIPELINE
         // ===============================
 
         stage('Pull Docker Image') {
@@ -167,12 +172,14 @@ pipeline {
                     echo "Valid Response: ${response}"
 
                     if (status != "200") {
-                        error("Valid request failed")
+                        error("Valid request failed (HTTP error)")
                     }
 
                     if (!response.contains("prediction")) {
-                        error("Prediction field missing")
+                        error("Prediction field missing in response")
                     }
+
+                    echo "Valid inference test passed."
                 }
             }
         }
@@ -194,25 +201,32 @@ pipeline {
                     echo "Invalid Response: ${response}"
 
                     if (status == "200") {
-                        error("Invalid request should not succeed")
+                        error("Invalid request should NOT succeed")
                     }
+
+                    echo "Invalid inference test passed."
                 }
             }
         }
     }
 
+    // ===============================
+    // POST ACTIONS
+    // ===============================
+
     post {
+
         always {
             sh "docker rm -f ${CONTAINER_NAME} || true"
             archiveArtifacts artifacts: 'app/artifacts/**', fingerprint: true
         }
 
         success {
-            echo "PIPELINE SUCCESS: Model trained, deployed, and validated."
+            echo "PIPELINE SUCCESS: Model trained, deployed, and validated successfully."
         }
 
         failure {
-            echo "PIPELINE FAILED: Either training or validation failed."
+            echo "PIPELINE FAILED: Training or validation step failed."
         }
     }
 }
