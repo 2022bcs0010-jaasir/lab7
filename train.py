@@ -11,9 +11,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 print("Name: Mohamed Jaasir Subair")
 print("Roll no: 2022BCS0010")
 
-os.makedirs("output/model", exist_ok=True)
 os.makedirs("app/artifacts", exist_ok=True)
-
 
 df = pd.read_csv("dataset/winequality-red.csv", sep=";")
 
@@ -41,14 +39,7 @@ r2_exp01_fs = r2_score(y_test, pred)
 print("LR-01 (Feature Selected) MSE:", mse_exp01_fs)
 print("LR-01 (Feature Selected) R2 :", r2_exp01_fs)
 
-
-
-
-
-
-
-
-with open("output/model/trained_model.pkl", "wb") as f:
+with open("app/model.pkl", "wb") as f:
     pickle.dump(model, f)
 
 metrics = {
@@ -58,3 +49,5 @@ metrics = {
 
 with open("app/artifacts/metrics.json", "w") as f:
     json.dump(metrics, f, indent=4)
+
+print("Model and metrics saved successfully.")
