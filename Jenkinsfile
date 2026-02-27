@@ -4,6 +4,8 @@ pipeline {
     environment {
         DOCKER_IMAGE = "mdjaasir2022bcs0010/lab6"
         METRICS_FILE = "app/artifacts/metrics.json"
+        CONTAINER_NAME = "wine_validation_container"
+        PORT = "8000"
     }
 
     stages {
@@ -38,7 +40,6 @@ pipeline {
             steps {
                 script {
                     def metrics = readJSON file: "${METRICS_FILE}"
-
                     env.CURRENT_MSE = metrics.MSE.toString()
                     env.CURRENT_R2  = metrics.R2.toString()
 
@@ -48,7 +49,6 @@ pipeline {
             }
         }
 
-   
         stage('Compare Accuracy') {
             steps {
                 script {
@@ -68,33 +68,23 @@ pipeline {
 
                         if (current_mse < best_mse && current_r2 > best_r2) {
                             env.MODEL_IMPROVED = "true"
-                            echo "Model Improved "
+                            echo "Model Improved"
                         } else {
                             env.MODEL_IMPROVED = "false"
-                            echo "Model Did Not Improve "
+                            error("Model did not improve. Stopping pipeline.")
                         }
                     }
                 }
             }
         }
 
-        
         stage('Build Docker Image') {
-            when {
-                expression { env.MODEL_IMPROVED == "true" }
-            }
             steps {
-                sh '''
-                    docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .
-                '''
+                sh 'docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .'
             }
         }
 
-     
         stage('Push Docker Image') {
-            when {
-                expression { env.MODEL_IMPROVED == "true" }
-            }
             steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'docker-access',
@@ -111,12 +101,118 @@ pipeline {
                 }
             }
         }
+
+        // ===============================
+        // LAB 7 VALIDATION STARTS HERE
+        // ===============================
+
+        stage('Pull Docker Image') {
+            steps {
+                sh 'docker pull ${DOCKER_IMAGE}:latest'
+            }
+        }
+
+        stage('Run Container') {
+            steps {
+                sh '''
+                    docker run -d -p ${PORT}:8000 \
+                    --name ${CONTAINER_NAME} \
+                    ${DOCKER_IMAGE}:latest
+                '''
+            }
+        }
+
+        stage('Wait for API Readiness') {
+            steps {
+                script {
+                    timeout(time: 60, unit: 'SECONDS') {
+                        waitUntil {
+                            def status = sh(
+                                script: "curl -s -o /dev/null -w '%{http_code}' http://localhost:${PORT}/health || true",
+                                returnStdout: true
+                            ).trim()
+                            return status == "200"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Valid Inference Test') {
+            steps {
+                script {
+                    def status = sh(
+                        script: """
+                        curl -s -o valid.txt -w '%{http_code}' \
+                        -X POST http://localhost:${PORT}/predict \
+                        -H "Content-Type: application/json" \
+                        -d '{
+                          "fixed_acidity": 7.4,
+                          "volatile_acidity": 0.7,
+                          "citric_acid": 0.0,
+                          "residual_sugar": 1.9,
+                          "chlorides": 0.076,
+                          "free_sulfur_dioxide": 11.0,
+                          "total_sulfur_dioxide": 34.0,
+                          "density": 0.9978,
+                          "pH": 3.51,
+                          "sulphates": 0.56,
+                          "alcohol": 9.4
+                        }'
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    def response = readFile('valid.txt')
+                    echo "Valid Response: ${response}"
+
+                    if (status != "200") {
+                        error("Valid request failed")
+                    }
+
+                    if (!response.contains("prediction")) {
+                        error("Prediction field missing")
+                    }
+                }
+            }
+        }
+
+        stage('Invalid Inference Test') {
+            steps {
+                script {
+                    def status = sh(
+                        script: """
+                        curl -s -o invalid.txt -w '%{http_code}' \
+                        -X POST http://localhost:${PORT}/predict \
+                        -H "Content-Type: application/json" \
+                        -d '{"fixed_acidity": 7.4}'
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    def response = readFile('invalid.txt')
+                    echo "Invalid Response: ${response}"
+
+                    if (status == "200") {
+                        error("Invalid request should not succeed")
+                    }
+                }
+            }
+        }
     }
 
-   
     post {
         always {
+            sh "docker rm -f ${CONTAINER_NAME} || true"
             archiveArtifacts artifacts: 'app/artifacts/**', fingerprint: true
+        }
+
+        success {
+            echo "PIPELINE SUCCESS: Model trained, deployed, and validated."
+        }
+
+        failure {
+            echo "PIPELINE FAILED: Either training or validation failed."
         }
     }
 }
