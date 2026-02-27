@@ -5,7 +5,7 @@ pipeline {
         DOCKER_IMAGE   = "mdjaasir2022bcs0010/lab7"
         METRICS_FILE   = "app/artifacts/metrics.json"
         CONTAINER_NAME = "wine_validation_container"
-        PORT           = "8002"
+        NETWORK_NAME   = "jenkins-net"
     }
 
     stages {
@@ -63,9 +63,8 @@ pipeline {
 
                         def current_mse = env.CURRENT_MSE.toFloat()
                         def current_r2  = env.CURRENT_R2.toFloat()
-
-                        def best_mse = BEST_MSE.toFloat()
-                        def best_r2  = BEST_R2.toFloat()
+                        def best_mse    = BEST_MSE.toFloat()
+                        def best_r2     = BEST_R2.toFloat()
 
                         echo "Best MSE: ${best_mse}"
                         echo "Best R2 : ${best_r2}"
@@ -86,7 +85,10 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .'
+                sh '''
+                    docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .
+                    docker tag ${DOCKER_IMAGE}:${BUILD_NUMBER} ${DOCKER_IMAGE}:latest
+                '''
             }
         }
 
@@ -99,7 +101,6 @@ pipeline {
                 )]) {
                     sh '''
                         echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
-                        docker tag ${DOCKER_IMAGE}:${BUILD_NUMBER} ${DOCKER_IMAGE}:latest
                         docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
                         docker push ${DOCKER_IMAGE}:latest
                     '''
@@ -120,9 +121,11 @@ pipeline {
         stage('Run Container') {
             steps {
                 sh '''
-                    docker run -d -p ${PORT}:8000 \
-                    --name ${CONTAINER_NAME} \
-                    ${DOCKER_IMAGE}:latest
+                    docker rm -f ${CONTAINER_NAME} || true
+                    docker run -d \
+                        --name ${CONTAINER_NAME} \
+                        --network ${NETWORK_NAME} \
+                        ${DOCKER_IMAGE}:latest
                 '''
             }
         }
@@ -133,9 +136,10 @@ pipeline {
                     timeout(time: 60, unit: 'SECONDS') {
                         waitUntil {
                             def status = sh(
-                                script: "curl -s -o /dev/null -w '%{http_code}' http://host.docker.internal:${PORT}/health || true",
+                                script: "curl -s -o /dev/null -w '%{http_code}' http://${CONTAINER_NAME}:8000/health || true",
                                 returnStdout: true
                             ).trim()
+                            echo "API Status: ${status}"
                             return status == "200"
                         }
                     }
@@ -149,7 +153,7 @@ pipeline {
                     def status = sh(
                         script: """
                         curl -s -o valid.txt -w '%{http_code}' \
-                        -X POST http://localhost:${PORT}/predict \
+                        -X POST http://${CONTAINER_NAME}:8000/predict \
                         -H "Content-Type: application/json" \
                         -d '{
                           "fixed_acidity": 7.4,
@@ -175,8 +179,8 @@ pipeline {
                         error("Valid request failed (HTTP error)")
                     }
 
-                    if (!response.contains("prediction")) {
-                        error("Prediction field missing in response")
+                    if (!response.contains("wine_quality")) {
+                        error("wine_quality field missing in response")
                     }
 
                     echo "Valid inference test passed."
@@ -190,7 +194,7 @@ pipeline {
                     def status = sh(
                         script: """
                         curl -s -o invalid.txt -w '%{http_code}' \
-                        -X POST http://localhost:${PORT}/predict \
+                        -X POST http://${CONTAINER_NAME}:8000/predict \
                         -H "Content-Type: application/json" \
                         -d '{"fixed_acidity": 7.4}'
                         """,
@@ -209,10 +213,6 @@ pipeline {
             }
         }
     }
-
-    // ===============================
-    // POST ACTIONS
-    // ===============================
 
     post {
 
