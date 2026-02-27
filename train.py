@@ -18,12 +18,8 @@ df = pd.read_csv("dataset/winequality-red.csv", sep=";")
 X = df.drop("quality", axis=1)
 y = df["quality"]
 
-corr = X.corrwith(y).abs().sort_values(ascending=False)
-top5_features = corr.index[:5]
 
-print("Selected Features:", list(top5_features))
-
-X_selected = X[top5_features]
+X_selected = X
 
 X_train, X_test, y_train, y_test = train_test_split(
     X_selected, y, test_size=0.20, random_state=42
